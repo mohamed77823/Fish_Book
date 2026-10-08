@@ -523,7 +523,7 @@ with c2:
     )
 
 
-        submitted = st.form_submit_button(
+    submitted = st.form_submit_button(
             "حفظ الحركة",
             use_container_width=True
         )
