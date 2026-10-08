@@ -503,22 +503,25 @@ with tab1:
             "ملاحظات إضافية"
         )
 
-        c1, c2 = st.columns(2)
+        
+# Simple manual date and time entry
 
-        with c1:
-            date = st.date_input(
-                "تاريخ الحركة",
-                value=now.date()
-            )
+c1, c2 = st.columns(2)
 
-        with c2:
-            time = st.time_input(
-                "وقت الحركة",
-                value=now.time().replace(
-                    second=0,
-                    microsecond=0
-                )
-            )
+with c1:
+    date_text = st.text_input(
+        "تاريخ الحركة (يوم/شهر/سنة)",
+        value=now.strftime("%d/%m/%Y"),
+        placeholder="08/10/2026"
+    )
+
+with c2:
+    time_text = st.text_input(
+        "وقت الحركة (ساعة:دقيقة)",
+        value=now.strftime("%H:%M"),
+        placeholder="13:07"
+    )
+
 
         submitted = st.form_submit_button(
             "حفظ الحركة",
@@ -526,11 +529,35 @@ with tab1:
         )
 
     # Save the movement
-    if submitted:
+    
+if submitted:
 
-        timestamp = datetime.combine(date, time)
+    try:
+        timestamp = datetime.strptime(
+            f"{date_text.strip()} {time_text.strip()}",
+            "%d/%m/%Y %H:%M"
+        )
 
-        try:
+        save_transaction(
+            timestamp.isoformat(),
+            book_title,
+            operation,
+            int(quantity),
+            recipient,
+            notes
+        )
+
+        st.success("تم تسجيل الحركة بنجاح")
+        st.rerun()
+
+    except ValueError as error:
+        st.error(
+            f"يرجى التأكد من صحة التاريخ والوقت: {error}"
+        )
+
+    except Exception as error:
+        st.error(str(error))
+
 
             save_transaction(
                 timestamp.isoformat(),
