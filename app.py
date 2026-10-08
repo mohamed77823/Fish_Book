@@ -4,7 +4,7 @@ import pandas as pd
 import sqlite3
 import io
 import hmac
-import plotpy.express as px
+import plotly.express as px
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
