@@ -4,7 +4,6 @@ import pandas as pd
 import sqlite3
 import io
 import hmac
-import plotly.express as px
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -735,50 +734,13 @@ with tab3:
     st.divider()
 
    
-import plotly.express as px
-
 st.subheader("توزيع المخزون حسب الإصدار")
 
-chart_df = inventory.copy()
+chart_df = inventory.set_index("book_title")[
+    ["remaining"]
+]
 
-fig = px.bar(
-    chart_df,
-    x="remaining",
-    y="book_title",
-    orientation="h",
-    text="remaining",
-    labels={
-        "remaining": "عدد النسخ المتوفرة",
-        "book_title": "عنوان الإصدار"
-    },
-    color_discrete_sequence=["#1689B5"]
-)
-
-fig.update_traces(
-    textposition="outside"
-)
-
-fig.update_layout(
-    height=550,
-    plot_bgcolor="white",
-    paper_bgcolor="rgba(0,0,0,0)",
-    font=dict(
-        family="Tahoma, Arial",
-        size=13,
-        color="#174A68"
-    ),
-    xaxis_title="عدد النسخ المتوفرة",
-    yaxis_title=None,
-    yaxis=dict(autorange="reversed"),
-    margin=dict(l=20, r=65, t=20, b=40)
-)
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-
+st.bar_chart(chart_df)
 
 # =========================================================
 # TAB 4 - TRANSACTION HISTORY
