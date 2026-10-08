@@ -818,6 +818,217 @@ with tab4:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+    # =========================================================
+    # ADMINISTRATOR ONLY - LOCKED TRANSACTION DELETION
+    # =========================================================
+
+    st.divider()
+
+    with st.expander("🔒 حذف حركة مسجلة - للمسؤول فقط"):
+
+        st.warning(
+            "هذه الخاصية مخصصة للمسؤول فقط. "
+            "سيؤدي حذف الحركة إلى تحديث المخزون تلقائياً."
+        )
+
+        # Read administrator password from Streamlit Secrets
+        try:
+            correct_password = str(
+                st.secrets["ADMIN_PASSWORD"]
+            )
+        except (KeyError, FileNotFoundError):
+            correct_password = ""
+
+        if not correct_password:
+
+            st.error(
+                "لم يتم إعداد كلمة مرور المسؤول. "
+                "يرجى إضافتها إلى Streamlit Secrets."
+            )
+
+        else:
+
+            # Password input
+            entered_password = st.text_input(
+                "كلمة مرور المسؤول",
+                type="password",
+                key="admin_delete_password"
+            )
+
+            # Verify administrator password
+            is_admin = (
+                bool(entered_password)
+                and hmac.compare_digest(
+                    entered_password,
+                    correct_password
+                )
+            )
+
+            if not is_admin:
+
+                st.info(
+                    "🔐 أدخل كلمة مرور المسؤول "
+                    "لعرض خيارات حذف الحركات."
+                )
+
+            else:
+
+                st.success(
+                    "تم التحقق من كلمة مرور المسؤول."
+                )
+
+                if transactions.empty:
+
+                    st.info(
+                        "لا توجد حركات مسجلة للحذف."
+                    )
+
+                else:
+
+                    # Build transaction selection list
+                    transaction_options = {}
+
+                    for _, row in transactions.iterrows():
+
+                        transaction_id = int(row["id"])
+
+                        label = (
+                            f"رقم الحركة: {transaction_id} | "
+                            f"{row['date']} | "
+                            f"{row['book_title']} | "
+                            f"{row['operation']} | "
+                            f"{int(row['quantity'])} نسخة"
+                        )
+
+                        transaction_options[label] = (
+                            transaction_id
+                        )
+
+                    selected_transaction = st.selectbox(
+                        "اختر الحركة التي ترغب في حذفها",
+                        options=list(
+                            transaction_options.keys()
+                        ),
+                        key="admin_transaction_select"
+                    )
+
+                    selected_id = transaction_options[
+                        selected_transaction
+                    ]
+
+                    # Display selected transaction details
+                    selected_row = transactions[
+                        transactions["id"] == selected_id
+                    ].iloc[0]
+
+                    st.markdown("#### تفاصيل الحركة المحددة")
+
+                    st.write(
+                        f"**الإصدار:** "
+                        f"{selected_row['book_title']}"
+                    )
+
+                    st.write(
+                        f"**نوع الحركة:** "
+                        f"{selected_row['operation']}"
+                    )
+
+                    st.write(
+                        f"**عدد النسخ:** "
+                        f"{int(selected_row['quantity'])}"
+                    )
+
+                    st.write(
+                        f"**التاريخ:** "
+                        f"{selected_row['date']}"
+                    )
+
+                    st.write(
+                        f"**المستلم / الجهة:** "
+                        f"{selected_row['recipient'] or '-'}"
+                    )
+
+                    st.divider()
+
+                    # Additional confirmation
+                    confirm_delete = st.checkbox(
+                        "أؤكد أنني أرغب في حذف "
+                        "هذه الحركة نهائياً",
+                        key=(
+                            "confirm_delete_"
+                            + str(selected_id)
+                        )
+                    )
+
+                    # Delete button
+                    if st.button(
+                        "🗑️ حذف الحركة المحددة",
+                        type="primary",
+                        disabled=not confirm_delete,
+                        use_container_width=True,
+                        key="admin_delete_button"
+                    ):
+
+                        # Recheck password at deletion time
+                        if not hmac.compare_digest(
+                            entered_password,
+                            correct_password
+                        ):
+
+                            st.error(
+                                "غير مصرح بإجراء الحذف."
+                            )
+
+                        else:
+
+                            try:
+
+                                with connect_db() as conn:
+
+                                    conn.execute(
+                                        "BEGIN IMMEDIATE"
+                                    )
+
+                                    # Verify that transaction exists
+                                    existing = conn.execute(
+                                        """
+                                        SELECT id
+                                        FROM transactions
+                                        WHERE id = ?
+                                        """,
+                                        (selected_id,)
+                                    ).fetchone()
+
+                                    if existing is None:
+
+                                        raise ValueError(
+                                            "الحركة غير موجودة."
+                                        )
+
+                                    # Delete selected transaction
+                                    conn.execute(
+                                        """
+                                        DELETE FROM transactions
+                                        WHERE id = ?
+                                        """,
+                                        (selected_id,)
+                                    )
+
+                                    conn.commit()
+
+                                st.success(
+                                    "تم حذف الحركة بنجاح، "
+                                    "وسيتم تحديث المخزون."
+                                )
+
+                                st.rerun()
+
+                            except Exception as error:
+
+                                st.error(
+                                    f"تعذر حذف الحركة: {error}"
+                                )
+
 # =========================================================
 # FOOTER
 # =========================================================
