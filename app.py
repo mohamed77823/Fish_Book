@@ -906,7 +906,7 @@ with tab4:
                 if transactions.empty:
 
                     st.info(
-                        "لا توجد حركات مسجلة للحذف."
+                        "لا توجد عمليات مسجلة للحذف."
                     )
 
                 else:
