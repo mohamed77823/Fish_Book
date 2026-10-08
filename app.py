@@ -431,31 +431,60 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # TAB 1 - REGISTER BOOK MOVEMENT
 # =========================================================
 
+# =========================================================
+# TAB 1 - REGISTER BOOK MOVEMENT
+# =========================================================
+
 with tab1:
 
     st.subheader("تسجيل حركة جديدة")
 
+    # Select the book OUTSIDE the form
+    # This allows the available quantity to update immediately
+    book_title = st.selectbox(
+        "اختر الإصدار",
+        list(BOOKS.keys()),
+        key="selected_book"
+    )
+
+    # Get the latest available quantity
+    current_inventory = get_inventory()
+
+    available = int(
+        current_inventory.loc[
+            current_inventory["book_title"] == book_title,
+            "remaining"
+        ].iloc[0]
+    )
+
+    # Display available stock
+    st.markdown(
+        f"""
+        <div style="
+            background-color: #E7F2FF;
+            padding: 18px;
+            border-radius: 10px;
+            margin-top: 15px;
+            margin-bottom: 15px;
+            text-align: right;
+            direction: rtl;
+            color: #124B70;
+            font-size: 18px;
+            border: 1px solid #C8E5FF;
+        ">
+            الكمية المتوفرة حالياً:
+            <strong>{available:,} نسخة</strong>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Transaction form
     with st.form("transaction_form", clear_on_submit=True):
 
         operation = st.selectbox(
             "نوع الحركة",
             ["تسليم", "إرجاع", "إضافة مخزون"]
-        )
-
-        book_title = st.selectbox(
-            "اختر الإصدار",
-            list(BOOKS.keys())
-        )
-
-        available = int(
-            inventory.loc[
-                inventory["book_title"] == book_title,
-                "remaining"
-            ].iloc[0]
-        )
-
-        st.info(
-            f"الكمية المتوفرة حاليًا: {available} نسخة"
         )
 
         quantity = st.number_input(
@@ -476,14 +505,12 @@ with tab1:
         c1, c2 = st.columns(2)
 
         with c1:
-
             date = st.date_input(
                 "تاريخ الحركة",
                 value=now.date()
             )
 
         with c2:
-
             time = st.time_input(
                 "وقت الحركة",
                 value=now.time().replace(
@@ -497,6 +524,7 @@ with tab1:
             use_container_width=True
         )
 
+    # Save the movement
     if submitted:
 
         timestamp = datetime.combine(date, time)
@@ -516,9 +544,7 @@ with tab1:
             st.rerun()
 
         except Exception as error:
-
             st.error(str(error))
-
 
 # =========================================================
 # TAB 2 - MONTHLY REPORT
