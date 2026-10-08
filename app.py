@@ -422,10 +422,10 @@ st.divider()
 # =========================================================
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📝 تسجيل حركة",
+    "📝 تسجيل عملية",
     "📊 التقرير الشهري",
     "📚 المخزون الحالي",
-    "📋 سجل الحركات"
+    "📋 سجل العمليات"
 ])
 
 # =========================================================
@@ -434,7 +434,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 
 with tab1:
 
-    st.subheader("تسجيل حركة جديدة")
+    st.subheader("تسجيل عملية جديدة")
 
     # Select the book OUTSIDE the form
     # This allows the available quantity to update immediately
@@ -480,7 +480,7 @@ with tab1:
     with st.form("transaction_form", clear_on_submit=True):
 
         operation = st.selectbox(
-            "نوع الحركة",
+            "نوع العملية",
             ["تسليم", "إرجاع", "إضافة مخزون"]
         )
 
@@ -534,7 +534,7 @@ with tab1:
             )
 
         submitted = st.form_submit_button(
-            "حفظ الحركة",
+            "حفظ العملية",
             use_container_width=True
         )
 
@@ -558,11 +558,11 @@ with tab1:
                 notes
             )
 
-            st.success("تم تسجيل الحركة بنجاح")
+            st.success("تم تسجيل العملية بنجاح")
             st.rerun()
 
         except ValueError as error:
-            st.error(f"تعذر تسجيل الحركة: {error}")
+            st.error(f"تعذر تسجيل العملية: {error}")
 
         except Exception as error:
             st.error(str(error))
@@ -769,11 +769,11 @@ with tab3:
 
 with tab4:
 
-    st.subheader("سجل جميع الحركات")
+    st.subheader("سجل جميع العمليات")
 
     filter_operation = st.selectbox(
-        "تصفية حسب نوع الحركة",
-        ["جميع الحركات", "تسليم", "إرجاع", "إضافة مخزون"]
+        "تصفية حسب نوع العملية",
+        ["جميع العمليات", "تسليم", "إرجاع", "إضافة مخزون"]
     )
 
     filter_book = st.selectbox(
@@ -783,7 +783,7 @@ with tab4:
 
     filtered = transactions.copy()
 
-    if filter_operation != "جميع الحركات":
+    if filter_operation != "جميع العمليات":
 
         filtered = filtered[
             filtered["operation"] == filter_operation
@@ -814,7 +814,7 @@ with tab4:
         filtered_display.columns = [
             "التاريخ",
             "عنوان الإصدار",
-            "نوع الحركة",
+            "نوع العملية",
             "العدد",
             "المستلم / الجهة",
             "ملاحظات"
@@ -825,7 +825,7 @@ with tab4:
         filtered_display = pd.DataFrame(columns=[
             "التاريخ",
             "عنوان الإصدار",
-            "نوع الحركة",
+            "نوع العملية",
             "العدد",
             "المستلم / الجهة",
             "ملاحظات"
@@ -838,7 +838,7 @@ with tab4:
     )
 
     st.download_button(
-        "📥 تحميل سجل الحركات",
+        "📥 تحميل سجل العمليات",
         data=export_excel(filtered_display),
         file_name="Book_Transactions.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -850,11 +850,11 @@ with tab4:
 
     st.divider()
 
-    with st.expander("🔒 حذف حركة مسجلة - للمسؤول فقط"):
+    with st.expander("🔒 حذف عملية مسجلة - للمسؤول فقط"):
 
         st.warning(
             "هذه الخاصية مخصصة للمسؤول فقط. "
-            "سيؤدي حذف الحركة إلى تحديث المخزون تلقائياً."
+            "سيؤدي حذف العملية إلى تحديث المخزون تلقائياً."
         )
 
         # Read administrator password from Streamlit Secrets
@@ -894,7 +894,7 @@ with tab4:
 
                 st.info(
                     "🔐 أدخل كلمة مرور المسؤول "
-                    "لعرض خيارات حذف الحركات."
+                    "لعرض خيارات حذف العمليات."
                 )
 
             else:
@@ -919,7 +919,7 @@ with tab4:
                         transaction_id = int(row["id"])
 
                         label = (
-                            f"رقم الحركة: {transaction_id} | "
+                            f"رقم العملية: {transaction_id} | "
                             f"{row['date'].strftime('%d/%m/%Y %I:%M %p')} | "
                             f"{row['book_title']} | "
                             f"{row['operation']} | "
@@ -931,7 +931,7 @@ with tab4:
                         )
 
                     selected_transaction = st.selectbox(
-                        "اختر الحركة التي ترغب في حذفها",
+                        "اختر العملية التي ترغب في حذفها",
                         options=list(
                             transaction_options.keys()
                         ),
@@ -947,7 +947,7 @@ with tab4:
                         transactions["id"] == selected_id
                     ].iloc[0]
 
-                    st.markdown("#### تفاصيل الحركة المحددة")
+                    st.markdown("#### تفاصيل العملية المحددة")
 
                     st.write(
                         f"**الإصدار:** "
@@ -955,7 +955,7 @@ with tab4:
                     )
 
                     st.write(
-                        f"**نوع الحركة:** "
+                        f"**نوع العملية:** "
                         f"{selected_row['operation']}"
                     )
 
@@ -979,7 +979,7 @@ with tab4:
                     # Additional confirmation
                     confirm_delete = st.checkbox(
                         "أؤكد أنني أرغب في حذف "
-                        "هذه الحركة نهائياً",
+                        "هذه العملية نهائياً",
                         key=(
                             "confirm_delete_"
                             + str(selected_id)
@@ -988,7 +988,7 @@ with tab4:
 
                     # Delete button
                     if st.button(
-                        "🗑️ حذف الحركة المحددة",
+                        "🗑️ حذف العملية المحددة",
                         type="primary",
                         disabled=not confirm_delete,
                         use_container_width=True,
@@ -1028,7 +1028,7 @@ with tab4:
                                     if existing is None:
 
                                         raise ValueError(
-                                            "الحركة غير موجودة."
+                                            "العملية غير موجودة."
                                         )
 
                                     # Delete selected transaction
@@ -1043,7 +1043,7 @@ with tab4:
                                     conn.commit()
 
                                 st.success(
-                                    "تم حذف الحركة بنجاح، "
+                                    "تم حذف العملية بنجاح، "
                                     "وسيتم تحديث المخزون."
                                 )
 
@@ -1052,7 +1052,7 @@ with tab4:
                             except Exception as error:
 
                                 st.error(
-                                    f"تعذر حذف الحركة: {error}"
+                                    f"تعذر حذف العملية: {error}"
                                 )
 
 # =========================================================
