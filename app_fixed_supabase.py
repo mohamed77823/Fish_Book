@@ -1,0 +1,970 @@
+
+import streamlit as st
+import pandas as pd
+import httpx
+import io
+import hmac
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# =========================================================
+# 1. WEBSITE CONFIGURATION
+# =========================================================
+
+st.set_page_config(
+    page_title="نظام متابعة وتوزيع الإصدارات",
+    page_icon="📚",
+    layout="wide"
+)
+
+TZ = ZoneInfo("Asia/Dubai")
+
+
+# =========================================================
+# 2. BOOK TITLES AND INITIAL STOCK
+# =========================================================
+
+BOOKS = {
+    "كتيب الاستزراع السمكي (عربي - عادي)": 513,
+    "كتيب الاستزراع السمكي (إنجليزي - عادي)": 346,
+    "كتيب الاستزراع السمكي (إنجليزي - VIP)": 99,
+    "كتيب الاستزراع السمكي (عربي - VIP)": 0,
+    "كتيب الاستزراع السمكي (عربي - VVIP)": 6,
+    "دليل الأسماك المحلية (عربي - عادي)": 583,
+    "دليل الأسماك المحلية (إنجليزي - عادي)": 0,
+    "دليل الأسماك المحلية (عربي - غلاف)": 517,
+    "دليل الأسماك المحلية (إنجليزي - VIP)": 0
+}
+
+MONTHS = [
+    "يناير", "فبراير", "مارس", "أبريل",
+    "مايو", "يونيو", "يوليو", "أغسطس",
+    "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"
+]
+
+# =========================================================
+# 3. LIGHT BLUE WEBSITE DESIGN
+# =========================================================
+
+st.markdown("""
+<style>
+
+.stApp {
+    background-color: #EAF8FF;
+    direction: rtl;
+}
+
+h1, h2, h3, p, label {
+    font-family: Tahoma, Arial, sans-serif;
+    color: #174A68;
+}
+
+h1 {
+    text-align: center;
+    font-weight: 800;
+}
+
+[data-testid="stMetric"] {
+    background-color: white;
+    border: 1px solid #B8E2F5;
+    border-radius: 15px;
+    padding: 18px;
+    box-shadow: 0px 3px 10px rgba(0,0,0,0.04);
+}
+
+[data-testid="stForm"] {
+    background-color: white;
+    border: 1px solid #B8E2F5;
+    border-radius: 15px;
+    padding: 20px;
+}
+
+.stButton > button,
+.stDownloadButton > button,
+[data-testid="stFormSubmitButton"] button {
+    background-color: #1689B5;
+    color: white;
+    border-radius: 10px;
+    border: none;
+    font-weight: bold;
+}
+
+.stButton > button:hover,
+.stDownloadButton > button:hover {
+    background-color: #0C6F96;
+    color: white;
+}
+
+[data-testid="stTabs"] {
+    background-color: transparent;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# 4. DATABASE
+# =========================================================
+
+# Use the REST API directly: the authenticated httpx connection was verified.
+# Keep the secret key on the Streamlit server; never expose it in the UI.
+def supabase_request(method, endpoint, *, params=None, payload=None, extra_headers=None):
+    url = str(st.secrets["SUPABASE_URL"]).strip().rstrip("/")
+    key = str(st.secrets["SUPABASE_SECRET_KEY"]).strip()
+    if not url.startswith("https://") or not url.endswith(".supabase.co"):
+        raise ValueError("تحقق من رابط Supabase في إعدادات Secrets")
+    headers = {"apikey": key}
+    # New sb_secret_ keys work in apikey; legacy JWT keys also work as bearer.
+    if not key.startswith("sb_secret_"):
+        headers["Authorization"] = f"Bearer {key}"
+    if extra_headers:
+        headers.update(extra_headers)
+    with httpx.Client(timeout=30) as client:
+        response = client.request(
+            method, f"{url}/rest/v1/{endpoint}",
+            headers=headers, params=params, json=payload,
+        )
+    response.raise_for_status()
+    return response.json() if response.content else []
+
+
+def initialize_database():
+    # Only insert missing titles; do not overwrite existing opening stock.
+    rows = [{"book_title": title, "initial_quantity": qty}
+            for title, qty in BOOKS.items()]
+    supabase_request(
+        "POST", "inventory", params={"on_conflict": "book_title"},
+        payload=rows,
+        extra_headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+    )
+
+
+try:
+    initialize_database()
+except (httpx.HTTPError, ValueError) as exc:
+    st.error("تعذر الاتصال بقاعدة بيانات الإصدارات. يرجى مراجعة إعدادات Supabase وسجلات التطبيق.")
+    st.error(f"نوع الخطأ: {type(exc).__name__}")
+    st.stop()
+
+# =========================================================
+# 5. LOAD TRANSACTIONS
+# =========================================================
+
+def get_transactions():
+    # Paginate so the history is not silently limited to 1,000 records.
+    all_rows = []
+    start = 0
+    while True:
+        batch = supabase_request("GET", "transactions", params={
+            "select": "*", "order": "id.asc", "offset": start, "limit": 1000
+        })
+        all_rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        start += 1000
+    df = pd.DataFrame(all_rows, columns=[
+        "id", "date", "book_title", "operation", "quantity",
+        "recipient", "notes", "created_at"
+    ])
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"])
+    return df.sort_values(["date", "id"], ascending=False).reset_index(drop=True) if not df.empty else df
+
+
+def get_inventory():
+    rows = supabase_request("GET", "inventory", params={
+        "select": "book_title,initial_quantity"
+    })
+    inventory = pd.DataFrame(rows, columns=["book_title", "initial_quantity"])
+    transactions = get_transactions()
+    inventory["distributed"] = 0
+    inventory["returned"] = 0
+    inventory["added"] = 0
+    if not transactions.empty:
+        for index, row in inventory.iterrows():
+            book_tx = transactions[transactions["book_title"] == row["book_title"]]
+            for col, op in [("distributed", "تسليم"),
+                            ("returned", "إرجاع"),
+                            ("added", "إضافة مخزون")]:
+                inventory.loc[index, col] = int(book_tx.loc[book_tx["operation"] == op, "quantity"].sum())
+    inventory["remaining"] = (inventory["initial_quantity"]
+                              - inventory["distributed"]
+                              + inventory["returned"] + inventory["added"])
+    # Preserve the sequence of titles in BOOKS.
+    inventory["sort_order"] = inventory["book_title"].map({v: i for i, v in enumerate(BOOKS)})
+    inventory = inventory.sort_values("sort_order").drop(columns="sort_order").reset_index(drop=True)
+    return inventory
+
+
+# =========================================================
+# 6. SAVE TRANSACTION
+# =========================================================
+def save_transaction(date, book_title, operation, quantity, recipient, notes):
+    # SQL function validates stock and inserts the transaction atomically.
+    supabase_request("POST", "rpc/record_book_transaction", payload={
+        "p_date": date,
+        "p_book_title": book_title,
+        "p_operation": operation,
+        "p_quantity": int(quantity),
+        "p_recipient": recipient,
+        "p_notes": notes,
+    })
+
+
+# =========================================================
+# 7. EXPORT EXCEL
+# =========================================================
+
+def export_excel(df):
+
+    output = io.BytesIO()
+
+    with pd.ExcelWriter(
+        output,
+        engine="openpyxl"
+    ) as writer:
+
+        df.to_excel(
+            writer,
+            sheet_name="Report",
+            index=False
+        )
+
+        worksheet = writer.sheets["Report"]
+        worksheet.sheet_view.rightToLeft = True
+
+        for column in worksheet.columns:
+
+            max_length = max(
+                len(str(cell.value or ""))
+                for cell in column
+            )
+
+            letter = column[0].column_letter
+
+            worksheet.column_dimensions[letter].width = min(
+                max_length + 3, 60
+            )
+
+    return output.getvalue()
+
+
+# =========================================================
+# 8. WEBSITE HEADER AND AUTHORITY LOGO
+# =========================================================
+
+logo = Path("logo.png")
+
+if logo.exists():
+
+    left, center, right = st.columns([2, 2, 2])
+
+    with center:
+        st.image(str(logo), use_container_width=True)
+
+st.title("نظام متابعة وتوزيع الإصدارات")
+
+st.markdown(
+    "<h4 style='text-align:center;color:#357A9A;'>"
+    "هيئة الشارقة للثروة السمكية"
+    "</h4>",
+    unsafe_allow_html=True
+)
+
+st.divider()
+
+# =========================================================
+# 9. DASHBOARD
+# =========================================================
+
+inventory = get_inventory()
+transactions = get_transactions()
+
+now = datetime.now(TZ)
+
+total_initial = int(inventory["initial_quantity"].sum())
+total_remaining = int(inventory["remaining"].sum())
+
+if not transactions.empty:
+
+    monthly_tx = transactions[
+        (transactions["date"].dt.month == now.month)
+        & (transactions["date"].dt.year == now.year)
+    ]
+
+    monthly_given = int(
+        monthly_tx[
+            monthly_tx["operation"] == "تسليم"
+        ]["quantity"].sum()
+    )
+
+    monthly_returned = int(
+        monthly_tx[
+            monthly_tx["operation"] == "إرجاع"
+        ]["quantity"].sum()
+    )
+
+else:
+
+    monthly_given = 0
+    monthly_returned = 0
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric(
+    "إجمالي المخزون الحالي",
+    f"{total_remaining:,}"
+)
+
+col2.metric(
+    "الكتب المسلّمة هذا الشهر",
+    f"{monthly_given:,}"
+)
+
+col3.metric(
+    "الكتب المُرجعة هذا الشهر",
+    f"{monthly_returned:,}"
+)
+
+col4.metric(
+    "عدد أنواع الإصدارات",
+    len(BOOKS)
+)
+
+st.divider()
+
+# =========================================================
+# 10. TABS
+# =========================================================
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📝 تسجيل عملية",
+    "📊 التقرير الشهري",
+    "📚 المخزون الحالي",
+    "📋 سجل العمليات"
+])
+
+# =========================================================
+# TAB 1 - REGISTER BOOK MOVEMENT
+# =========================================================
+
+with tab1:
+
+    st.subheader("تسجيل عملية جديدة")
+
+    # Select the book OUTSIDE the form
+    # This allows the available quantity to update immediately
+    book_title = st.selectbox(
+        "اختر الإصدار",
+        list(BOOKS.keys()),
+        key="selected_book"
+    )
+
+    # Get the latest available quantity
+    current_inventory = get_inventory()
+
+    available = int(
+        current_inventory.loc[
+            current_inventory["book_title"] == book_title,
+            "remaining"
+        ].iloc[0]
+    )
+
+    # Display available stock
+    st.markdown(
+        f"""
+        <div style="
+            background-color: #E7F2FF;
+            padding: 18px;
+            border-radius: 10px;
+            margin-top: 15px;
+            margin-bottom: 15px;
+            text-align: right;
+            direction: rtl;
+            color: #124B70;
+            font-size: 18px;
+            border: 1px solid #C8E5FF;
+        ">
+            الكمية المتوفرة حالياً:
+            <strong>{available:,} نسخة</strong>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Transaction form
+    with st.form("transaction_form", clear_on_submit=True):
+
+        operation = st.selectbox(
+            "نوع العملية",
+            ["تسليم", "إرجاع", "إضافة مخزون"]
+        )
+
+        quantity = st.number_input(
+            "عدد النسخ",
+            min_value=1,
+            value=1,
+            step=1
+        )
+
+        recipient = st.text_input(
+            "اسم المستلم / الجهة"
+        )
+
+        notes = st.text_area(
+            "ملاحظات إضافية/ اسم منفّذ العملية"
+        )
+
+
+        # Calendar date picker and precise hour/minute dropdowns
+        date_col, hour_col, minute_col, period_col = st.columns([2, 1, 1, 1])
+
+        with date_col:
+            selected_date = st.date_input(
+                "تاريخ العملية",
+                value=now.date(),
+                format="DD/MM/YYYY"
+            )
+
+        with hour_col:
+            selected_hour = st.selectbox(
+                "الساعة",
+                options=list(range(1, 13)),
+                index=(now.hour % 12 or 12) - 1,
+                format_func=lambda h: f"{h:02d}"
+            )
+
+        with minute_col:
+            selected_minute = st.selectbox(
+                "الدقيقة",
+                options=list(range(60)),
+                index=now.minute,
+                format_func=lambda m: f"{m:02d}"
+            )
+
+        with period_col:
+            selected_period = st.selectbox(
+                "الفترة",
+                options=["AM", "PM"],
+                index=0 if now.hour < 12 else 1
+            )
+
+        submitted = st.form_submit_button(
+            "حفظ العملية",
+            use_container_width=True
+        )
+
+    # Save the movement
+    if submitted:
+        try:
+            timestamp = datetime.combine(
+                selected_date,
+                datetime.min.time().replace(
+                    hour=(selected_hour % 12) + (12 if selected_period == "PM" else 0),
+                    minute=selected_minute
+                )
+            )
+
+            save_transaction(
+                timestamp.isoformat(),
+                book_title,
+                operation,
+                int(quantity),
+                recipient,
+                notes
+            )
+
+            st.success("تم تسجيل العملية بنجاح")
+            st.rerun()
+
+        except ValueError as error:
+            st.error(f"تعذر تسجيل العملية: {error}")
+
+        except Exception as error:
+            st.error(str(error))
+
+
+# =========================================================
+# TAB 2 - MONTHLY REPORT
+# =========================================================
+
+with tab2:
+
+    st.subheader("التقرير الشهري لتوزيع الإصدارات")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+
+        year = st.number_input(
+            "السنة",
+            min_value=2020,
+            max_value=2100,
+            value=now.year,
+            step=1
+        )
+
+    with c2:
+
+        month = st.selectbox(
+            "الشهر",
+            range(1, 13),
+            index=now.month - 1,
+            format_func=lambda x: MONTHS[x - 1]
+        )
+
+    if not transactions.empty:
+
+        selected_tx = transactions[
+            (transactions["date"].dt.year == year)
+            & (transactions["date"].dt.month == month)
+        ]
+
+    else:
+
+        selected_tx = transactions
+
+    report_rows = []
+
+    for book in BOOKS:
+
+        book_transactions = selected_tx[
+            selected_tx["book_title"] == book
+        ]
+
+        given = int(
+            book_transactions[
+                book_transactions["operation"] == "تسليم"
+            ]["quantity"].sum()
+        )
+
+        returned = int(
+            book_transactions[
+                book_transactions["operation"] == "إرجاع"
+            ]["quantity"].sum()
+        )
+
+        report_rows.append({
+            "عنوان الإصدار": book,
+            "الكتب المسلّمة": given,
+            "الكتب المُرجعة": returned,
+            "صافي التوزيع": given - returned
+        })
+
+    monthly_report = pd.DataFrame(report_rows)
+
+    total_row = pd.DataFrame([{
+        "عنوان الإصدار": "الإجمالي",
+        "الكتب المسلّمة": monthly_report[
+            "الكتب المسلّمة"
+        ].sum(),
+        "الكتب المُرجعة": monthly_report[
+            "الكتب المُرجعة"
+        ].sum(),
+        "صافي التوزيع": monthly_report[
+            "صافي التوزيع"
+        ].sum()
+    }])
+
+    monthly_report = pd.concat(
+        [monthly_report, total_row],
+        ignore_index=True
+    )
+
+    st.dataframe(
+        monthly_report,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.download_button(
+        "📥 تحميل التقرير الشهري Excel",
+        data=export_excel(monthly_report),
+        file_name=f"Monthly_Report_{year}_{month}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    st.divider()
+
+    st.subheader("ملخص جميع أشهر السنة")
+
+    yearly_rows = []
+
+    for m in range(1, 13):
+
+        if not transactions.empty:
+
+            month_df = transactions[
+                (transactions["date"].dt.year == year)
+                & (transactions["date"].dt.month == m)
+            ]
+
+        else:
+
+            month_df = transactions
+
+        given = int(
+            month_df[
+                month_df["operation"] == "تسليم"
+            ]["quantity"].sum()
+        )
+
+        returned = int(
+            month_df[
+                month_df["operation"] == "إرجاع"
+            ]["quantity"].sum()
+        )
+
+        yearly_rows.append({
+            "الشهر": MONTHS[m - 1],
+            "الكتب المسلّمة": given,
+            "الكتب المُرجعة": returned,
+            "صافي التوزيع": given - returned
+        })
+
+    yearly_report = pd.DataFrame(yearly_rows)
+
+    st.dataframe(
+        yearly_report,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.download_button(
+        "📥 تحميل التقرير السنوي",
+        data=export_excel(yearly_report),
+        file_name=f"Yearly_Report_{year}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+# =========================================================
+# TAB 3 - INVENTORY
+# =========================================================
+
+with tab3:
+
+    st.subheader("المخزون الحالي للإصدارات")
+
+    inventory_display = inventory.rename(columns={
+        "book_title": "عنوان الإصدار",
+        "initial_quantity": "المخزون الافتتاحي",
+        "distributed": "إجمالي النسخ المسلّمة",
+        "returned": "إجمالي النسخ المُرجعة",
+        "added": "إضافات المخزون",
+        "remaining": "المخزون المتبقي"
+    })
+
+    st.dataframe(
+        inventory_display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.download_button(
+        "📥 تحميل تقرير المخزون",
+        data=export_excel(inventory_display),
+        file_name="Current_Inventory.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    st.divider()
+
+   
+    st.subheader("توزيع المخزون حسب الإصدار")
+
+    chart_df = inventory.set_index("book_title")[
+        ["remaining"]
+    ]
+
+    st.bar_chart(chart_df)
+
+# =========================================================
+# TAB 4 - TRANSACTION HISTORY
+# =========================================================
+
+with tab4:
+
+    st.subheader("سجل جميع العمليات")
+
+    filter_operation = st.selectbox(
+        "تصفية حسب نوع العملية",
+        ["جميع العمليات", "تسليم", "إرجاع", "إضافة مخزون"]
+    )
+
+    filter_book = st.selectbox(
+        "تصفية حسب الإصدار",
+        ["جميع الإصدارات"] + list(BOOKS.keys())
+    )
+
+    filtered = transactions.copy()
+
+    if filter_operation != "جميع العمليات":
+
+        filtered = filtered[
+            filtered["operation"] == filter_operation
+        ]
+
+    if filter_book != "جميع الإصدارات":
+
+        filtered = filtered[
+            filtered["book_title"] == filter_book
+        ]
+
+    if not filtered.empty:
+
+        filtered_display = filtered[[
+            "date",
+            "book_title",
+            "operation",
+            "quantity",
+            "recipient",
+            "notes"
+        ]].copy()
+
+        # Display dates in 12-hour time without changing stored timestamps.
+        filtered_display["date"] = filtered_display["date"].dt.strftime(
+            "%d/%m/%Y %I:%M %p"
+        )
+
+        filtered_display.columns = [
+            "التاريخ",
+            "عنوان الإصدار",
+            "نوع العملية",
+            "العدد",
+            "المستلم / الجهة",
+            "ملاحظات"
+        ]
+
+    else:
+
+        filtered_display = pd.DataFrame(columns=[
+            "التاريخ",
+            "عنوان الإصدار",
+            "نوع العملية",
+            "العدد",
+            "المستلم / الجهة",
+            "ملاحظات"
+        ])
+
+    st.dataframe(
+        filtered_display,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.download_button(
+        "📥 تحميل سجل العمليات",
+        data=export_excel(filtered_display),
+        file_name="Book_Transactions.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    # =========================================================
+    # ADMINISTRATOR ONLY - LOCKED TRANSACTION DELETION
+    # =========================================================
+
+    st.divider()
+
+    with st.expander("🔒 حذف عملية مسجلة - للمسؤول فقط"):
+
+        st.warning(
+            "هذه الخاصية مخصصة للمسؤول فقط. "
+            "سيؤدي حذف العملية إلى تحديث المخزون تلقائياً."
+        )
+
+        # Read administrator password from Streamlit Secrets
+        try:
+            correct_password = str(
+                st.secrets["ADMIN_PASSWORD"]
+            )
+        except (KeyError, FileNotFoundError):
+            correct_password = ""
+
+        if not correct_password:
+
+            st.error(
+                "لم يتم إعداد كلمة مرور المسؤول. "
+                "يرجى إضافتها إلى Streamlit Secrets."
+            )
+
+        else:
+
+            # Password input
+            entered_password = st.text_input(
+                "كلمة مرور المسؤول",
+                type="password",
+                key="admin_delete_password"
+            )
+
+            # Verify administrator password
+            is_admin = (
+                bool(entered_password)
+                and hmac.compare_digest(
+                    entered_password,
+                    correct_password
+                )
+            )
+
+            if not is_admin:
+
+                st.info(
+                    "🔐 أدخل كلمة مرور المسؤول "
+                    "لعرض خيارات حذف العمليات."
+                )
+
+            else:
+
+                st.success(
+                    "تم التحقق من كلمة مرور المسؤول."
+                )
+
+                if transactions.empty:
+
+                    st.info(
+                        "لا توجد عمليات مسجلة للحذف."
+                    )
+
+                else:
+
+                    # Build transaction selection list
+                    transaction_options = {}
+
+                    for _, row in transactions.iterrows():
+
+                        transaction_id = int(row["id"])
+
+                        label = (
+                            f"رقم العملية: {transaction_id} | "
+                            f"{row['date'].strftime('%d/%m/%Y %I:%M %p')} | "
+                            f"{row['book_title']} | "
+                            f"{row['operation']} | "
+                            f"{int(row['quantity'])} نسخة"
+                        )
+
+                        transaction_options[label] = (
+                            transaction_id
+                        )
+
+                    selected_transaction = st.selectbox(
+                        "اختر العملية التي ترغب في حذفها",
+                        options=list(
+                            transaction_options.keys()
+                        ),
+                        key="admin_transaction_select"
+                    )
+
+                    selected_id = transaction_options[
+                        selected_transaction
+                    ]
+
+                    # Display selected transaction details
+                    selected_row = transactions[
+                        transactions["id"] == selected_id
+                    ].iloc[0]
+
+                    st.markdown("#### تفاصيل العملية المحددة")
+
+                    st.write(
+                        f"**الإصدار:** "
+                        f"{selected_row['book_title']}"
+                    )
+
+                    st.write(
+                        f"**نوع العملية:** "
+                        f"{selected_row['operation']}"
+                    )
+
+                    st.write(
+                        f"**عدد النسخ:** "
+                        f"{int(selected_row['quantity'])}"
+                    )
+
+                    st.write(
+                        f"**التاريخ:** "
+                        f"{selected_row['date'].strftime('%d/%m/%Y %I:%M %p')}"
+                    )
+
+                    st.write(
+                        f"**المستلم / الجهة:** "
+                        f"{selected_row['recipient'] or '-'}"
+                    )
+
+                    st.divider()
+
+                    # Additional confirmation
+                    confirm_delete = st.checkbox(
+                        "أؤكد أنني أرغب في حذف "
+                        "هذه العملية نهائياً",
+                        key=(
+                            "confirm_delete_"
+                            + str(selected_id)
+                        )
+                    )
+
+                    # Delete button
+                    if st.button(
+                        "🗑️ حذف العملية المحددة",
+                        type="primary",
+                        disabled=not confirm_delete,
+                        use_container_width=True,
+                        key="admin_delete_button"
+                    ):
+
+                        # Recheck password at deletion time
+                        if not hmac.compare_digest(
+                            entered_password,
+                            correct_password
+                        ):
+
+                            st.error(
+                                "غير مصرح بإجراء الحذف."
+                            )
+
+                        else:
+
+                            try:
+
+                                deleted = supabase_request(
+                                    "DELETE", "transactions",
+                                    params={"id": f"eq.{int(selected_id)}", "select": "id"},
+                                    extra_headers={"Prefer": "return=representation"},
+                                )
+                                if not deleted:
+                                    raise ValueError("العملية غير موجودة.")
+
+                                st.success(
+                                    "تم حذف العملية بنجاح، "
+                                    "وسيتم تحديث المخزون."
+                                )
+
+                                st.rerun()
+
+                            except Exception as error:
+
+                                st.error(
+                                    f"تعذر حذف العملية: {error}"
+                                )
+
+# =========================================================
+# FOOTER
+# =========================================================
+
+st.divider()
+
+st.markdown(
+    """
+    <div style="
+        text-align:center;
+        color:#357A9A;
+        padding:20px;
+        font-size:13px;
+    ">
+    هيئة الشارقة للثروة السمكية
+    <br>
+    نظام متابعة وتوزيع الإصدارات
+    </div>
+    """,
+    unsafe_allow_html=True
+)
