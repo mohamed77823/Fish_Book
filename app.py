@@ -121,7 +121,34 @@ def initialize_database():
     db.table("inventory").upsert(rows, on_conflict="book_title", ignore_duplicates=True).execute()
 
 
-initialize_database()
+import httpx
+
+url = st.secrets["SUPABASE_URL"].strip().rstrip("/")
+key = st.secrets["SUPABASE_SECRET_KEY"].strip()
+
+try:
+    response = httpx.get(
+        f"{url}/rest/v1/inventory",
+        headers={"apikey": key},
+        params={"select": "book_title,initial_quantity", "limit": "1"},
+        timeout=20,
+    )
+
+    st.write("Supabase API status:", response.status_code)
+
+    if response.status_code == 200:
+        st.success("✅ Supabase database connection works!")
+    elif response.status_code in (401, 403):
+        st.error("❌ API key or database permissions problem.")
+    elif response.status_code == 404:
+        st.error("❌ Inventory table or API endpoint not found.")
+    else:
+        st.error("❌ API request failed. Check Streamlit logs.")
+
+except httpx.RequestError as e:
+    st.error(f"❌ Network error: {type(e).__name__}")
+
+st.stop()
 # =========================================================
 # 5. LOAD TRANSACTIONS
 # =========================================================
