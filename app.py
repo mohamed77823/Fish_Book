@@ -121,38 +121,30 @@ def initialize_database():
     db.table("inventory").upsert(rows, on_conflict="book_title", ignore_duplicates=True).execute()
 
 
-import socket
-import httpx
-from urllib.parse import urlparse
-
-url = st.secrets["SUPABASE_URL"].strip().rstrip("/")
-host = urlparse(url).hostname
-
-if not host or not host.endswith(".supabase.co"):
-    st.error("❌ Invalid Supabase URL. Check Streamlit Secrets.")
-    st.stop()
+from supabase import create_client
+import streamlit as st
 
 try:
-    ip = socket.gethostbyname(host)
-    st.success("✅ DNS connection successful")
+    url = st.secrets["SUPABASE_URL"].strip()
+    key = st.secrets["SUPABASE_SECRET_KEY"].strip()
 
-except socket.gaierror:
-    st.error("❌ DNS failed. Check the Supabase Project URL and project status.")
-    st.stop()
+    db = create_client(url, key)
 
-try:
-    response = httpx.get(f"{url}/rest/v1/", timeout=15)
-    st.success(f"✅ Supabase server reachable. HTTP status: {response.status_code}")
+    result = (
+        db.table("inventory")
+        .select("book_title, initial_quantity")
+        .limit(1)
+        .execute()
+    )
 
-except httpx.ConnectError:
-    st.error("❌ Cannot connect to Supabase. Check network connectivity or project status.")
-    st.stop()
+    st.success("✅ Supabase connection and authentication successful!")
+    st.write("Database response:", result.data)
 
-except httpx.TimeoutException:
-    st.error("❌ Supabase connection timed out.")
-    st.stop()
+except Exception as e:
+    st.error(f"❌ Connection test failed: {type(e).__name__}")
+    st.write("Check the application logs for details.")
 
-st.stop()  # Remove the diagnostic block and restore initialize_database() after testing
+st.stop()
 
 # =========================================================
 # 5. LOAD TRANSACTIONS
