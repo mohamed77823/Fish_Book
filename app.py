@@ -121,31 +121,7 @@ def initialize_database():
     db.table("inventory").upsert(rows, on_conflict="book_title", ignore_duplicates=True).execute()
 
 
-from supabase import create_client
-import streamlit as st
-
-try:
-    url = st.secrets["SUPABASE_URL"].strip()
-    key = st.secrets["SUPABASE_SECRET_KEY"].strip()
-
-    db = create_client(url, key)
-
-    result = (
-        db.table("inventory")
-        .select("book_title, initial_quantity")
-        .limit(1)
-        .execute()
-    )
-
-    st.success("✅ Supabase connection and authentication successful!")
-    st.write("Database response:", result.data)
-
-except Exception as e:
-    st.error(f"❌ Connection test failed: {type(e).__name__}")
-    st.write("Check the application logs for details.")
-
-st.stop()
-
+initialize_database()
 # =========================================================
 # 5. LOAD TRANSACTIONS
 # =========================================================
