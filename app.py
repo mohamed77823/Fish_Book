@@ -121,7 +121,38 @@ def initialize_database():
     db.table("inventory").upsert(rows, on_conflict="book_title", ignore_duplicates=True).execute()
 
 
-initialize_database()
+import socket
+import httpx
+from urllib.parse import urlparse
+
+url = st.secrets["SUPABASE_URL"].strip().rstrip("/")
+host = urlparse(url).hostname
+
+if not host or not host.endswith(".supabase.co"):
+    st.error("❌ Invalid Supabase URL. Check Streamlit Secrets.")
+    st.stop()
+
+try:
+    ip = socket.gethostbyname(host)
+    st.success("✅ DNS connection successful")
+
+except socket.gaierror:
+    st.error("❌ DNS failed. Check the Supabase Project URL and project status.")
+    st.stop()
+
+try:
+    response = httpx.get(f"{url}/rest/v1/", timeout=15)
+    st.success(f"✅ Supabase server reachable. HTTP status: {response.status_code}")
+
+except httpx.ConnectError:
+    st.error("❌ Cannot connect to Supabase. Check network connectivity or project status.")
+    st.stop()
+
+except httpx.TimeoutException:
+    st.error("❌ Supabase connection timed out.")
+    st.stop()
+
+st.stop()  # Remove the diagnostic block and restore initialize_database() after testing
 
 # =========================================================
 # 5. LOAD TRANSACTIONS
